@@ -2,11 +2,37 @@
   "name": "litellm-pyodide",
   "version": "1.0.0",
   "description": "Run LiteLLM in a multi-worker setup on the Web with Pyodide",
-  "main": "index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
+    "venv": "test -d .venv || python3 -m venv .venv",
+    "python:install": "run-s venv python:install:black",
+    "python:install:black": "test -x ./.venv/bin/python || python3 -m venv .venv && ./.venv/bin/python -m pip install --upgrade pip black",
+    "python:format": "run-s python:install:black python:format:run",
+    "python:format:run": "./.venv/bin/python -m black .",
+    "python:lint": "run-s python:install:black python:lint:run",
+    "python:lint:run": "./.venv/bin/python -m black --check .",
+    "format:js": "biome format --write",
+    "lint:js": "biome check --fix",
     "build": "NODE_OPTIONS='--import tsx' zx build.ts",
-    "lint": "biome check --fix",
-    "format": "biome format --write"
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "format": "run-s format:js python:format",
+    "lint": "run-s lint:js python:lint",
+    "test": "npm run build && vitest run"
   },
   "repository": {
     "type": "git",
@@ -15,15 +41,32 @@
   "keywords": [],
   "author": "Sepehr Laal",
   "license": "MIT",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/web-harness/litellm-pyodide/issues"
   },
   "homepage": "https://github.com/web-harness/litellm-pyodide#readme",
+  "dependencies": {
+    "debug": "^4.4.3",
+    "eventemitter3": "^5.0.1",
+    "remote-web-streams": "^0.2.0",
+    "uniqid": "^5.4.0",
+    "workerpool": "^10.0.2"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
+    "@types/debug": "^4.1.13",
     "@types/node": "^25.6.0",
+    "@types/uniqid": "^5.3.4",
+    "@types/yazl": "^3.3.1",
+    "npm-run-all": "^4.1.5",
+    "playwright": "^1.59.1",
+    "pyodide": "^0.29.3",
+    "ts-loader": "^9.5.4",
     "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "webpack": "^5.102.1",
+    "yazl": "^3.3.1",
     "zx": "^8.8.5"
   }
 }

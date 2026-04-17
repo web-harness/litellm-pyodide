@@ -1,0 +1,4 @@
+{
+  "litellmVersion": "1.83.7.post0",
+  "overlayPackageDir": "python/litellm_overlay"
+}
