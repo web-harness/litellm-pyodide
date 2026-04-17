@@ -1,0 +1,29 @@
+{
+  "name": "litellm-pyodide",
+  "version": "1.0.0",
+  "description": "Run LiteLLM in a multi-worker setup on the Web with Pyodide",
+  "main": "index.js",
+  "scripts": {
+    "build": "NODE_OPTIONS='--import tsx' zx build.ts",
+    "lint": "biome check --fix",
+    "format": "biome format --write"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/web-harness/litellm-pyodide.git"
+  },
+  "keywords": [],
+  "author": "Sepehr Laal",
+  "license": "MIT",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/web-harness/litellm-pyodide/issues"
+  },
+  "homepage": "https://github.com/web-harness/litellm-pyodide#readme",
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "zx": "^8.8.5"
+  }
+}
