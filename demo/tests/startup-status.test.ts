@@ -4,7 +4,6 @@ import {
   applyCacheState,
   applyInitProgress,
   createInitialModelStatuses,
-  createMockLoadingTimeline,
   summarizeStartup,
 } from "../src/startup-status";
 
@@ -33,21 +32,5 @@ describe("startup status helpers", () => {
 
     expect(loading[CHAT_MODEL_ID].state).toBe("loading");
     expect(summarizeStartup(loading)).toContain("reusing cached artifacts");
-  });
-
-  test("mock timeline ends with ready models", () => {
-    const timeline = createMockLoadingTimeline(createInitialModelStatuses());
-    const final = timeline.at(-1);
-
-    expect(final).toBeDefined();
-    if (!final) {
-      throw new Error(
-        "Expected the mock loading timeline to produce a final state.",
-      );
-    }
-
-    expect(final[CHAT_MODEL_ID].state).toBe("ready");
-    expect(final[EMBEDDING_MODEL_ID].state).toBe("ready");
-    expect(summarizeStartup(final)).toContain("Both models are ready");
   });
 });

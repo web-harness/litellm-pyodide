@@ -160,22 +160,3 @@ export function summarizeStartup(statuses: Record<string, ModelStatus>) {
   }
   return "Checking cache state and preparing local models.";
 }
-
-export function createMockLoadingTimeline(
-  statuses: Record<string, ModelStatus>,
-) {
-  const first = applyCacheState(statuses, {
-    [CHAT_MODEL_ID]: false,
-    [EMBEDDING_MODEL_ID]: true,
-  });
-  const second = applyInitProgress(first, {
-    text: `Downloading ${CHAT_MODEL_ID} model artifacts`,
-    progress: 0.35,
-  });
-  const third = applyInitProgress(second, {
-    text: `Loading ${EMBEDDING_MODEL_ID} from IndexedDB cache`,
-    progress: 0.8,
-  });
-  const final = markStartupReady(third);
-  return [first, second, third, final];
-}

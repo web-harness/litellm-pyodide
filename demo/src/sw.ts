@@ -2,7 +2,6 @@
 
 import { ServiceWorkerMLCEngineHandler } from "@mlc-ai/web-llm";
 import {
-  createMockDemoEngineAdapter,
   errorResponse,
   handleDemoRoute,
   matchDemoRoute,
@@ -11,8 +10,6 @@ import {
 declare const self: ServiceWorkerGlobalScope;
 
 let handler: ServiceWorkerMLCEngineHandler | undefined;
-const useMockEngine =
-  new URL(self.location.href).searchParams.get("mock") === "1";
 
 function ensureHandler() {
   if (!handler) {
@@ -25,10 +22,6 @@ function ensureHandler() {
 ensureHandler();
 
 function getAdapter() {
-  if (useMockEngine) {
-    return createMockDemoEngineAdapter();
-  }
-
   const activeHandler = ensureHandler();
 
   return {

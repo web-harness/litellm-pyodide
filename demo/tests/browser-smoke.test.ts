@@ -70,10 +70,10 @@ describe.sequential("demo browser smoke", () => {
     await stopProcess(preview);
   });
 
-  test("boots the built demo and exercises all endpoint panels in mock mode", async () => {
+  test("reports unsupported WebGPU honestly instead of faking demo responses", async () => {
     const previewPort = await reservePreviewPort();
     const previewOrigin = `http://127.0.0.1:${previewPort}`;
-    const previewUrl = `${previewOrigin}/?mockEngine=1`;
+    const previewUrl = `${previewOrigin}/`;
 
     preview = spawn(
       npmCommand,
@@ -98,6 +98,12 @@ describe.sequential("demo browser smoke", () => {
     const browser = await chromium.launch();
     try {
       const page = await browser.newPage();
+      await page.addInitScript(() => {
+        Object.defineProperty(window.navigator, "gpu", {
+          configurable: true,
+          value: undefined,
+        });
+      });
       await page.goto(previewUrl, { waitUntil: "networkidle" });
       await page
         .getByRole("heading", {
@@ -105,79 +111,34 @@ describe.sequential("demo browser smoke", () => {
         })
         .waitFor();
 
-      const startupSummary = page.getByTestId("startup-summary");
-      const earlySummary = await startupSummary.textContent();
-      if (!earlySummary || /Both models are ready/i.test(earlySummary)) {
-        throw new Error(
-          "Expected the startup summary to show a pre-ready loading state first.",
-        );
-      }
-
       await page
-        .getByText(/Both models are ready/i)
+        .getByText(/This demo requires Chrome-class WebGPU support/i)
         .waitFor({ timeout: 30000 });
-      await page.getByRole("button", { name: "Warmup" }).click();
-      await page.getByRole("button", { name: "Run non-stream" }).nth(0).click();
-      await page.getByRole("button", { name: "Run stream" }).nth(0).click();
-      await page.getByRole("button", { name: "Run non-stream" }).nth(1).click();
-      await page.getByRole("button", { name: "Run stream" }).nth(1).click();
-      await page.getByRole("button", { name: "Run non-stream" }).nth(2).click();
-      await page.getByRole("button", { name: "Run stream" }).nth(2).click();
-      await page.getByRole("button", { name: "Run embeddings" }).click();
-      await page
-        .locator("#prompt-input")
-        .fill("Give me a short proof this mock route is wired correctly.");
-      await page.getByRole("button", { name: "Send prompt" }).click();
 
-      await page.waitForFunction(
-        () =>
-          !document
-            .querySelector('[data-testid="chat-output"]')
-            ?.textContent?.includes("No chat result yet."),
-      );
-      await page.waitForFunction(
-        () =>
-          !document
-            .querySelector('[data-testid="responses-output"]')
-            ?.textContent?.includes("No responses result yet."),
-      );
-      await page.waitForFunction(
-        () =>
-          !document
-            .querySelector('[data-testid="messages-output"]')
-            ?.textContent?.includes("No messages result yet."),
-      );
-      await page.waitForFunction(
-        () =>
-          !document
-            .querySelector('[data-testid="embeddings-output"]')
-            ?.textContent?.includes("No embeddings result yet."),
-      );
-      await page.waitForFunction(() =>
-        document
-          .querySelector('[data-testid="prompt-thread"]')
-          ?.textContent?.includes("Mock reply for"),
-      );
+      const phaseText = await page
+        .locator("dt", { hasText: "Phase" })
+        .locator("xpath=following-sibling::dd[1]")
+        .textContent();
+      const startupSummary = await page
+        .getByTestId("startup-summary")
+        .textContent();
+      const webgpuText = await page.locator("dd").nth(3).textContent();
 
-      const chatText = await page.getByTestId("chat-output").textContent();
-      const responsesText = await page
-        .getByTestId("responses-output")
-        .textContent();
-      const messagesText = await page
-        .getByTestId("messages-output")
-        .textContent();
-      const embeddingsText = await page
-        .getByTestId("embeddings-output")
-        .textContent();
-      const promptThreadText = await page
-        .getByTestId("prompt-thread")
-        .textContent();
-
-      expect(chatText).toContain("Mock");
-      expect(responsesText).toContain("response.completed");
-      expect(messagesText).toContain("message_stop");
-      expect(embeddingsText).toContain("embedding");
-      expect(promptThreadText).toContain("Mock reply for");
+      expect(phaseText).toContain("failed");
+      expect(startupSummary).toContain("Startup failed");
+      expect(webgpuText).toContain(
+        "This demo requires Chrome-class WebGPU support",
+      );
+      expect(
+        await page.getByRole("button", { name: "Warmup" }).isDisabled(),
+      ).toBe(true);
+      expect(
+        await page.getByRole("button", { name: "Run embeddings" }).isDisabled(),
+      ).toBe(true);
+      expect(
+        await page.getByRole("button", { name: "Send prompt" }).isDisabled(),
+      ).toBe(true);
+      await page.close();
 
       await page.close();
     } finally {

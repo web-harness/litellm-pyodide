@@ -18,7 +18,6 @@ import {
   applyCacheState,
   applyInitProgress,
   createInitialModelStatuses,
-  createMockLoadingTimeline,
   type ModelStatus,
   markStartupFailed,
   markStartupReady,
@@ -42,10 +41,6 @@ type DemoPhase =
   | "loading_models"
   | "ready"
   | "failed";
-
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
@@ -183,8 +178,6 @@ function bindClientEvents(
 export function App() {
   void bundledServiceWorkerUrl;
   const serviceWorkerReloadKey = "litellm-pyodide-sw-reload";
-  const search = useMemo(() => new URLSearchParams(window.location.search), []);
-  const mockEngine = search.get("mockEngine") === "1";
   const baseUrl = useMemo(
     () => new URL(import.meta.env.BASE_URL, window.location.href).toString(),
     [],
@@ -205,9 +198,7 @@ export function App() {
     "Runtime module not loaded yet.",
   );
   const [webgpuStatus, setWebgpuStatus] = useState(
-    mockEngine
-      ? "Mock mode active for automated smoke validation."
-      : "Checking WebGPU support...",
+    "Checking WebGPU support...",
   );
   const [proxyBase, setProxyBase] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -243,14 +234,6 @@ export function App() {
     let cancelled = false;
 
     async function detectRuntimeMode() {
-      if (mockEngine) {
-        return {
-          useMock: true,
-          webgpuMessage: "Mock engine active for automated smoke validation.",
-          fallbackReason: undefined,
-        };
-      }
-
       const navigatorWithGpu = navigator as Navigator & {
         gpu?: {
           requestAdapter?: () => Promise<{
@@ -263,10 +246,10 @@ export function App() {
 
       if (!navigatorWithGpu.gpu?.requestAdapter) {
         return {
-          useMock: true,
+          supported: false,
           webgpuMessage:
-            "WebGPU is unavailable in this browser. Compatibility mock mode is active; use Chrome for live local inference.",
-          fallbackReason: "WebGPU is unavailable in this browser.",
+            "WebGPU is unavailable in this browser. This demo requires Chrome-class WebGPU support for live local inference.",
+          failureReason: "WebGPU is unavailable in this browser.",
         };
       }
 
@@ -274,10 +257,10 @@ export function App() {
         const adapter = await navigatorWithGpu.gpu.requestAdapter();
         if (!adapter) {
           return {
-            useMock: true,
+            supported: false,
             webgpuMessage:
-              "No WebGPU adapter is available. Compatibility mock mode is active; use Chrome for live local inference.",
-            fallbackReason: "No WebGPU adapter is available.",
+              "No WebGPU adapter is available. This demo requires Chrome-class WebGPU support for live local inference.",
+            failureReason: "No WebGPU adapter is available.",
           };
         }
 
@@ -288,24 +271,23 @@ export function App() {
           workgroupStorageLimit < minComputeWorkgroupStorageSize
         ) {
           return {
-            useMock: true,
-            webgpuMessage: `This browser exposes maxComputeWorkgroupStorageSize=${workgroupStorageLimit}, below the ${minComputeWorkgroupStorageSize} required by the fixed WebLLM models. Compatibility mock mode is active; use Chrome for live local inference.`,
-            fallbackReason: `Insufficient WebGPU workgroup storage limit (${workgroupStorageLimit}).`,
+            supported: false,
+            webgpuMessage: `This browser exposes maxComputeWorkgroupStorageSize=${workgroupStorageLimit}, below the ${minComputeWorkgroupStorageSize} required by the fixed WebLLM models. Use Chrome for live local inference.`,
+            failureReason: `Insufficient WebGPU workgroup storage limit (${workgroupStorageLimit}).`,
           };
         }
 
         return {
-          useMock: false,
+          supported: true,
           webgpuMessage: "WebGPU API detected in the browser.",
-          fallbackReason: undefined,
+          failureReason: undefined,
         };
       } catch (error) {
         return {
-          useMock: true,
+          supported: false,
           webgpuMessage:
-            "WebGPU adapter initialization failed in this browser. Compatibility mock mode is active; use Chrome for live local inference.",
-          fallbackReason:
-            error instanceof Error ? error.message : String(error),
+            "WebGPU adapter initialization failed in this browser. This demo requires Chrome-class WebGPU support for live local inference.",
+          failureReason: error instanceof Error ? error.message : String(error),
         };
       }
     }
@@ -340,18 +322,11 @@ export function App() {
       });
     }
 
-    async function registerServiceWorker(useMockServiceWorker: boolean) {
+    async function registerServiceWorker() {
       setPhase("registering");
       setServiceWorkerStatus("Registering module service worker...");
-      const serviceWorkerUrl = new URL(
-        `${import.meta.env.BASE_URL}sw.js`,
-        window.location.href,
-      );
-      if (useMockServiceWorker) {
-        serviceWorkerUrl.searchParams.set("mock", "1");
-      }
       const registration = await navigator.serviceWorker.register(
-        serviceWorkerUrl,
+        new URL(`${import.meta.env.BASE_URL}sw.js`, window.location.href),
         {
           type: "module",
         },
@@ -415,29 +390,6 @@ export function App() {
       return client;
     }
 
-    async function bootstrapMock(
-      runtime: LiteLLMPyodideRuntime,
-      fallbackReason?: string,
-    ) {
-      setPhase("loading_models");
-      if (fallbackReason) {
-        pushLog(setLogs, `Compatibility fallback enabled: ${fallbackReason}`);
-      }
-      const timeline = createMockLoadingTimeline(createInitialModelStatuses());
-      for (const snapshot of timeline) {
-        if (cancelled) {
-          return;
-        }
-        setStatuses(snapshot);
-        await wait(220);
-      }
-      await ensureClient(runtime);
-      if (!cancelled) {
-        setPhase("ready");
-        pushLog(setLogs, "Mock startup completed.");
-      }
-    }
-
     async function bootstrapReal(runtime: LiteLLMPyodideRuntime) {
       setPhase("checking_cache");
       pushLog(setLogs, "Checking model cache state.");
@@ -489,12 +441,29 @@ export function App() {
         }
 
         setWebgpuStatus(runtimeMode.webgpuMessage);
-        await registerServiceWorker(runtimeMode.useMock);
-        const runtime = await ensureRuntimeLoaded();
-        if (runtimeMode.useMock) {
-          await bootstrapMock(runtime, runtimeMode.fallbackReason);
+        if (!runtimeMode.supported) {
+          setPhase("failed");
+          setServiceWorkerStatus(
+            "Skipped because the browser does not support the required WebGPU features.",
+          );
+          setRuntimeStatus(
+            "Runtime was not started because the browser cannot run the fixed local models.",
+          );
+          setStatuses((current) =>
+            markStartupFailed(
+              current,
+              runtimeMode.failureReason ?? runtimeMode.webgpuMessage,
+            ),
+          );
+          pushLog(
+            setLogs,
+            `Startup blocked: ${runtimeMode.failureReason ?? runtimeMode.webgpuMessage}`,
+          );
           return;
         }
+
+        await registerServiceWorker();
+        const runtime = await ensureRuntimeLoaded();
         await bootstrapReal(runtime);
       } catch (error) {
         if (cancelled) {
@@ -520,7 +489,7 @@ export function App() {
       cancelled = true;
       void clientRef.current?.close();
     };
-  }, [mockEngine, normalizedProxyBase]);
+  }, [normalizedProxyBase]);
 
   async function withClient<T>(
     action: (runtime: LiteLLMPyodideRuntime, client: DemoClient) => Promise<T>,

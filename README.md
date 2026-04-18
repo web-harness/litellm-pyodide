@@ -223,7 +223,7 @@ npm run demo:test
 
 `demo:build` rebuilds the package dist output, copies it into `demo/public/litellm-pyodide`, and then builds the Vite app.
 
-`demo:test` runs the demo unit tests and a browser smoke path against the built demo in mock mode so the Pages workflow can validate the transport path without requiring WebGPU in CI.
+`demo:test` runs the demo unit tests and a browser smoke path that verifies unsupported-WebGPU browsers fail honestly instead of presenting fake local inference.
 
 ## Warmup And Health
 
@@ -286,7 +286,7 @@ The test suite covers:
 - callback forwarding and request scoping
 - browser worker smoke coverage against the built dist output
 - demo startup-state helpers and route adapters
-- demo browser smoke coverage against the built Pages app in mock mode
+- demo browser smoke coverage against the built Pages app for honest unsupported-browser behavior
 
 ## Repository Layout
 
