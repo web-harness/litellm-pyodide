@@ -1,9 +1,11 @@
-import type EventEmitter from "eventemitter3";
 import createDebug from "debug";
+import type EventEmitter from "eventemitter3";
 import { fromReadablePort } from "remote-web-streams";
+import type { Promise as WorkerPoolPromise } from "workerpool";
 import workerpool from "workerpool";
 import { RequestAbortedError, WorkerInitializationError } from "../errors";
 import type {
+  ClientEventMap,
   ClientOptions,
   EndpointKind,
   HealthSnapshot,
@@ -16,6 +18,7 @@ import type {
   WorkerEventEnvelope,
   WorkerInvokePayload,
   WorkerResultEnvelope,
+  WorkerStreamOpenPayload,
 } from "./worker-types";
 
 declare const __webpack_public_path__: string;
@@ -31,9 +34,20 @@ interface RunRequestOptions {
   signal?: AbortSignal;
 }
 
+function isStreamOpenPayload(
+  payload: unknown,
+): payload is WorkerStreamOpenPayload {
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      "readablePort" in payload &&
+      payload.readablePort instanceof MessagePort,
+  );
+}
+
 export class PoolAdapter {
   private readonly pool: workerpool.Pool;
-  private readonly emitter: EventEmitter;
+  private readonly emitter: EventEmitter<ClientEventMap>;
   private readonly runtime: RuntimeKind;
   private readonly options: ClientOptions;
   private readonly activeStreamCancels = new Set<() => Promise<void>>();
@@ -42,7 +56,7 @@ export class PoolAdapter {
   constructor(
     runtime: RuntimeKind,
     options: ClientOptions,
-    emitter: EventEmitter,
+    emitter: EventEmitter<ClientEventMap>,
   ) {
     this.runtime = runtime;
     this.options = options;
@@ -53,7 +67,7 @@ export class PoolAdapter {
       this.runtime === "node" && workerScriptPath.startsWith("file:")
         ? new URL(workerScriptPath).pathname
         : workerScriptPath;
-    this.pool = workerpool.pool(workerScript as unknown as string, {
+    this.pool = workerpool.pool(workerScript, {
       workerType: this.runtime === "node" ? "thread" : "web",
       ...(this.runtime === "node"
         ? {}
@@ -83,7 +97,7 @@ export class PoolAdapter {
         1,
         this.options.maxWorkers ?? this.options.minWorkers ?? 1,
       );
-      const results = await Promise.all(
+      const results: HealthSnapshot[] = await Promise.all(
         Array.from({ length: workerCount }, () =>
           this.pool.exec("initialize", [
             {
@@ -95,7 +109,7 @@ export class PoolAdapter {
           ]),
         ),
       );
-      return results[0] as HealthSnapshot;
+      return results[0];
     } catch (error) {
       throw new WorkerInitializationError(
         error instanceof Error ? error.message : String(error),
@@ -107,9 +121,9 @@ export class PoolAdapter {
     await this.initializeIfNeeded();
     debug("run", { endpoint: options.endpoint, requestId: options.requestId });
     const task = this.createTask(options);
-    const result = (await task.promise.catch((error) => {
+    const result: WorkerResultEnvelope = await task.promise.catch((error) => {
       throw this.normalizeTaskError(error, options);
-    })) as WorkerResultEnvelope;
+    });
     return result.result;
   }
 
@@ -134,7 +148,14 @@ export class PoolAdapter {
         return;
       }
 
-      const payload = event.payload as { readablePort: MessagePort };
+      if (!isStreamOpenPayload(event.payload)) {
+        rejectPort?.(
+          new Error("Worker reported stream_open without a readable port."),
+        );
+        return;
+      }
+
+      const payload = event.payload;
       opened = true;
       debug("stream_open", {
         endpoint: options.endpoint,
@@ -213,7 +234,7 @@ export class PoolAdapter {
 
   async health(): Promise<HealthSnapshot> {
     await this.initializeIfNeeded();
-    return (await this.pool.exec("health", [])) as HealthSnapshot;
+    return this.pool.exec("health", []);
   }
 
   async close(): Promise<void> {
@@ -243,15 +264,16 @@ export class PoolAdapter {
       timeoutMs: options.timeoutMs,
     };
 
-    const task = this.pool.exec("invoke", [invokePayload], {
-      on: (event: WorkerEventEnvelope) => {
-        this.routeWorkerEvent(event);
-        extraHandler?.(event);
+    const task: WorkerPoolPromise<WorkerResultEnvelope> = this.pool.exec(
+      "invoke",
+      [invokePayload],
+      {
+        on: (event: WorkerEventEnvelope) => {
+          this.routeWorkerEvent(event);
+          extraHandler?.(event);
+        },
       },
-    }) as Promise<WorkerResultEnvelope> & {
-      cancel?: () => void;
-      timeout?: (ms: number) => void;
-    };
+    );
 
     if (options.timeoutMs && typeof task.timeout === "function") {
       task.timeout(options.timeoutMs);
@@ -276,8 +298,9 @@ export class PoolAdapter {
 
     return {
       promise: task,
-      cancel:
-        typeof task.cancel === "function" ? () => task.cancel?.() : undefined,
+      cancel: () => {
+        task.cancel();
+      },
     };
   }
 
@@ -308,7 +331,7 @@ export class PoolAdapter {
     }
   }
 
-  private emitSafe(eventName: string, payload: unknown) {
+  private emitSafe(eventName: keyof ClientEventMap, payload: unknown) {
     try {
       this.emitter.emit(eventName, payload);
     } catch {

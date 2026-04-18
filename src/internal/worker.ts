@@ -1,5 +1,5 @@
-import type { PyodideInterface } from "pyodide";
 import createDebug from "debug";
+import type { PyodideInterface } from "pyodide";
 import { RemoteWritableStream } from "remote-web-streams";
 import workerpool from "workerpool";
 import type {

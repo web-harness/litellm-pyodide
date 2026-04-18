@@ -39,8 +39,15 @@ describe("startup status helpers", () => {
     const timeline = createMockLoadingTimeline(createInitialModelStatuses());
     const final = timeline.at(-1);
 
-    expect(final?.[CHAT_MODEL_ID].state).toBe("ready");
-    expect(final?.[EMBEDDING_MODEL_ID].state).toBe("ready");
-    expect(summarizeStartup(final!)).toContain("Both models are ready");
+    expect(final).toBeDefined();
+    if (!final) {
+      throw new Error(
+        "Expected the mock loading timeline to produce a final state.",
+      );
+    }
+
+    expect(final[CHAT_MODEL_ID].state).toBe("ready");
+    expect(final[EMBEDDING_MODEL_ID].state).toBe("ready");
+    expect(summarizeStartup(final)).toContain("Both models are ready");
   });
 });

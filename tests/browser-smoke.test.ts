@@ -1,8 +1,8 @@
-import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closeServer, createMockProviderServer } from "./helpers/mock-provider";

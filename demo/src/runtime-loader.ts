@@ -8,9 +8,7 @@ export async function loadLiteLLMPyodideRuntime() {
       `${import.meta.env.BASE_URL}litellm-pyodide/index.mjs`,
       window.location.href,
     ).toString();
-    runtimePromise = import(
-      /* @vite-ignore */ runtimeUrl
-    ) as Promise<LiteLLMPyodideRuntime>;
+    runtimePromise = import(/* @vite-ignore */ runtimeUrl);
   }
 
   return runtimePromise;

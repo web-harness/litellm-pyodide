@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build && NODE_OPTIONS='--import tsx' zx ../build.ts finalize-demo-build",
-    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {

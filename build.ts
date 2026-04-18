@@ -9,8 +9,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import path from "node:path";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import createDebug from "debug";

@@ -1,3 +1,5 @@
+import type EventEmitter from "eventemitter3";
+
 export type RuntimeKind = "browser" | "node";
 
 export type EndpointKind =
@@ -77,6 +79,12 @@ export interface WorkerLifecycleEvent {
   details: JsonValue;
 }
 
+export interface RequestCompletedPayload {
+  requestId: string;
+  endpoint: EndpointKind;
+  result: JsonValue;
+}
+
 export interface RuntimeManifestWheel {
   name: string;
   version: string;
@@ -122,9 +130,23 @@ export interface HealthSnapshot {
   lastFatalError?: string;
 }
 
-export interface ClientEvents {
-  on(event: string, listener: (...args: unknown[]) => void): this;
-  off(event: string, listener: (...args: unknown[]) => void): this;
-  once(event: string, listener: (...args: unknown[]) => void): this;
-  removeAllListeners(event?: string): this;
+export interface ClientEventMap {
+  "worker:boot": [WorkerLifecycleEvent];
+  "worker:ready": [WorkerLifecycleEvent];
+  "worker:error": [WorkerLifecycleEvent];
+  "worker:shutdown": [WorkerLifecycleEvent];
+  "callback:pre_api_call": [CallbackEventPayload];
+  "callback:success": [CallbackEventPayload];
+  [eventName: `callback:${string}`]: [CallbackEventPayload];
+  "request:stream_chunk": [StreamChunk];
+  "request:completed": [RequestCompletedPayload];
+  debug: [unknown];
+  progress: [unknown];
+  result_meta: [unknown];
+  failure_meta: [unknown];
 }
+
+export type ClientEvents = Pick<
+  EventEmitter<ClientEventMap>,
+  "on" | "off" | "once" | "removeAllListeners"
+>;

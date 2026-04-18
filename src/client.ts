@@ -1,11 +1,12 @@
-import EventEmitter from "eventemitter3";
 import createDebug from "debug";
+import EventEmitter from "eventemitter3";
 import uniqid from "uniqid";
 import { mergeMetadata } from "./internal/metadata";
 import { PoolAdapter } from "./internal/pool-adapter";
 import { detectRuntime } from "./runtime/detect";
 import type {
   ChatCompletionRequest,
+  ClientEventMap,
   ClientEvents,
   ClientOptions,
   EmbeddingsRequest,
@@ -18,6 +19,11 @@ import type {
 
 type StreamResult = ReadableStream<StreamChunk>;
 type EndpointResult = JsonValue;
+type RequestWithClientFields = Record<string, unknown> & {
+  stream?: boolean;
+  metadata?: Record<string, JsonValue>;
+  signal?: AbortSignal;
+};
 
 function stripSignal(request: Record<string, unknown>) {
   const next = { ...request };
@@ -50,15 +56,15 @@ export class LiteLLMPyodideClient {
     ) => Promise<EndpointResult>;
   };
 
-  private readonly emitter: EventEmitter;
+  private readonly emitter: EventEmitter<ClientEventMap>;
   private readonly adapter: PoolAdapter;
   private readonly options: ClientOptions;
   private closed = false;
 
   constructor(options: ClientOptions = {}) {
     this.options = options;
-    this.emitter = new EventEmitter();
-    this.events = this.emitter as unknown as ClientEvents;
+    this.emitter = new EventEmitter<ClientEventMap>();
+    this.events = this.emitter;
     this.adapter = new PoolAdapter(detectRuntime(), options, this.emitter);
 
     this.chatCompletions = {
@@ -71,8 +77,7 @@ export class LiteLLMPyodideClient {
       create: (request) => this.invoke("responses", request),
     };
     this.embeddings = {
-      create: async (request) =>
-        this.invoke("embeddings", request) as Promise<EndpointResult>,
+      create: (request) => this.invoke("embeddings", request),
     };
 
     if (options.warmup) {
@@ -100,12 +105,16 @@ export class LiteLLMPyodideClient {
   }
 
   private async invoke(
+    endpoint: "embeddings",
+    request: RequestWithClientFields,
+  ): Promise<EndpointResult>;
+  private async invoke(
+    endpoint: "chat_completions" | "messages" | "responses",
+    request: RequestWithClientFields,
+  ): Promise<EndpointResult | StreamResult>;
+  private async invoke(
     endpoint: "chat_completions" | "messages" | "responses" | "embeddings",
-    request: Record<string, unknown> & {
-      stream?: boolean;
-      metadata?: Record<string, unknown>;
-      signal?: AbortSignal;
-    },
+    request: RequestWithClientFields,
   ): Promise<EndpointResult | StreamResult> {
     this.ensureOpen();
     const requestId = uniqid("req-");
@@ -113,12 +122,7 @@ export class LiteLLMPyodideClient {
     debug("invoke", { endpoint, requestId, stream });
     const payload = stripSignal({
       ...request,
-      metadata: mergeMetadata(
-        request.metadata as Record<string, never> | undefined,
-        requestId,
-        endpoint,
-        stream,
-      ),
+      metadata: mergeMetadata(request.metadata, requestId, endpoint, stream),
     });
 
     if (stream) {

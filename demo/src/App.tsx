@@ -2,6 +2,7 @@ import type { InitProgressReport } from "@mlc-ai/web-llm";
 import { CreateServiceWorkerMLCEngine, hasModelInCache } from "@mlc-ai/web-llm";
 import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CallbackEventPayload, StreamChunk } from "../../src/index";
 import { DEMO_WEBLLM_APP_CONFIG, getDemoApiBase } from "./demo-config";
 import {
   CHAT_MODEL_ID,
@@ -9,22 +10,22 @@ import {
   getChatModelLabel,
   getEmbeddingModelLabel,
 } from "./demo-models";
-import bundledServiceWorkerUrl from "./sw.ts?worker&url";
-import { loadLiteLLMPyodideRuntime } from "./runtime-loader";
+import {
+  type LiteLLMPyodideRuntime,
+  loadLiteLLMPyodideRuntime,
+} from "./runtime-loader";
 import {
   applyCacheState,
   applyInitProgress,
   createInitialModelStatuses,
   createMockLoadingTimeline,
+  type ModelStatus,
   markStartupFailed,
   markStartupReady,
   summarizeStartup,
-  type ModelStatus,
 } from "./startup-status";
+import bundledServiceWorkerUrl from "./sw.ts?worker&url";
 
-type LiteLLMPyodideRuntime = Awaited<
-  ReturnType<typeof loadLiteLLMPyodideRuntime>
->;
 type DemoClient = ReturnType<LiteLLMPyodideRuntime["createClient"]>;
 
 type DemoPhase =
@@ -66,6 +67,16 @@ function pushLog(setter: Dispatch<SetStateAction<string[]>>, message: string) {
       120,
     ),
   );
+}
+
+function getEventEndpoint(
+  payload: CallbackEventPayload | StreamChunk | unknown,
+) {
+  if (payload && typeof payload === "object" && "endpoint" in payload) {
+    return String(payload.endpoint);
+  }
+
+  return "unknown";
 }
 
 export function App() {
@@ -117,6 +128,7 @@ export function App() {
 
   const startupSummary = summarizeStartup(statuses);
   const ready = phase === "ready";
+  const normalizedProxyBase = proxyBase.trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -214,28 +226,22 @@ export function App() {
       client.events.on("callback:pre_api_call", (payload) =>
         pushLog(
           setLogs,
-          `Callback pre_api_call for ${String((payload as any).endpoint)}`,
+          `Callback pre_api_call for ${getEventEndpoint(payload)}`,
         ),
       );
       client.events.on("callback:success", (payload) =>
-        pushLog(
-          setLogs,
-          `Callback success for ${String((payload as any).endpoint)}`,
-        ),
+        pushLog(setLogs, `Callback success for ${getEventEndpoint(payload)}`),
       );
       client.events.on("request:stream_chunk", (payload) =>
-        pushLog(
-          setLogs,
-          `Stream chunk for ${String((payload as any).endpoint)}`,
-        ),
+        pushLog(setLogs, `Stream chunk for ${getEventEndpoint(payload)}`),
       );
       client.events.on("request:completed", (payload) =>
-        pushLog(setLogs, `Completed ${String((payload as any).endpoint)}`),
+        pushLog(setLogs, `Completed ${getEventEndpoint(payload)}`),
       );
     }
 
     async function ensureClient(runtime: LiteLLMPyodideRuntime) {
-      const nextProxy = proxyBase.trim() || undefined;
+      const nextProxy = normalizedProxyBase || undefined;
       if (clientRef.current && activeProxyRef.current === nextProxy) {
         return clientRef.current;
       }
@@ -317,7 +323,6 @@ export function App() {
         },
       );
       void engine;
-      pushLog(setLogs, "WebLLM service-worker engine resolved.");
       setStatuses((current) => markStartupReady(current));
       await ensureClient(runtime);
       if (!cancelled) {
@@ -362,17 +367,17 @@ export function App() {
       cancelled = true;
       void clientRef.current?.close();
     };
-  }, [mockEngine]);
+  }, [mockEngine, normalizedProxyBase]);
 
   async function withClient<T>(
-    action: (runtime: LiteLLMPyodideRuntime, client: any) => Promise<T>,
+    action: (runtime: LiteLLMPyodideRuntime, client: DemoClient) => Promise<T>,
   ) {
     const runtime = runtimeRef.current;
     if (!runtime) {
       throw new Error("Runtime module has not loaded yet.");
     }
 
-    const nextProxy = proxyBase.trim() || undefined;
+    const nextProxy = normalizedProxyBase || undefined;
     if (!clientRef.current || activeProxyRef.current !== nextProxy) {
       if (clientRef.current) {
         await clientRef.current.close();
@@ -385,33 +390,7 @@ export function App() {
       });
       activeProxyRef.current = nextProxy;
       clientRef.current = client;
-      client.events.on("worker:boot", () =>
-        pushLog(setLogs, "Runtime worker booted."),
-      );
-      client.events.on("worker:ready", () =>
-        pushLog(setLogs, "Runtime worker ready."),
-      );
-      client.events.on("callback:pre_api_call", (payload: unknown) =>
-        pushLog(
-          setLogs,
-          `Callback pre_api_call for ${String((payload as any).endpoint)}`,
-        ),
-      );
-      client.events.on("callback:success", (payload: unknown) =>
-        pushLog(
-          setLogs,
-          `Callback success for ${String((payload as any).endpoint)}`,
-        ),
-      );
-      client.events.on("request:stream_chunk", (payload: unknown) =>
-        pushLog(
-          setLogs,
-          `Stream chunk for ${String((payload as any).endpoint)}`,
-        ),
-      );
-      client.events.on("request:completed", (payload: unknown) =>
-        pushLog(setLogs, `Completed ${String((payload as any).endpoint)}`),
-      );
+      bindClient(client);
     }
 
     return action(runtime, clientRef.current);

@@ -29,16 +29,14 @@ function getAdapter() {
     return createMockDemoEngineAdapter();
   }
 
-  if (!handler) {
-    return undefined;
-  }
+  const activeHandler = ensureHandler();
 
   return {
     chatCompletionsCreate(request: Record<string, unknown>) {
-      return handler!.engine.chat.completions.create(request as never);
+      return activeHandler.engine.chat.completions.create(request);
     },
     embeddingsCreate(request: Record<string, unknown>) {
-      return handler!.engine.embeddings.create(request as never);
+      return activeHandler.engine.embeddings.create(request);
     },
   };
 }

@@ -43,6 +43,9 @@ jobs:
       - name: Install demo dependencies
         run: npm --prefix demo install
 
+      - name: Install Playwright Chromium
+        run: npm --prefix demo exec playwright install --with-deps chromium
+
       - name: Sync built runtime into demo public assets
         run: npm run demo:sync-runtime
 

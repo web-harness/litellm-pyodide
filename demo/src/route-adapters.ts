@@ -1,8 +1,22 @@
+import type {
+  ChatCompletion,
+  ChatCompletionChunk,
+  CreateEmbeddingResponse,
+} from "@mlc-ai/web-llm";
 import { CHAT_MODEL_ID, EMBEDDING_MODEL_ID } from "./demo-models";
 
+type DemoChatResult =
+  | ChatCompletion
+  | AsyncIterable<ChatCompletionChunk>
+  | ReadableStream<ChatCompletionChunk>;
+
 export interface DemoEngineAdapter {
-  chatCompletionsCreate(request: Record<string, unknown>): Promise<unknown>;
-  embeddingsCreate(request: Record<string, unknown>): Promise<unknown>;
+  chatCompletionsCreate(
+    request: Record<string, unknown>,
+  ): Promise<DemoChatResult>;
+  embeddingsCreate(
+    request: Record<string, unknown>,
+  ): Promise<CreateEmbeddingResponse>;
 }
 
 const jsonHeaders = {
@@ -145,9 +159,8 @@ function responsesToChatRequest(request: Record<string, unknown>) {
   } satisfies Record<string, unknown>;
 }
 
-function extractAssistantText(chatResponse: any) {
-  const content = chatResponse?.choices?.[0]?.message?.content;
-  return normalizeContent(content ?? "");
+function extractAssistantText(chatResponse: ChatCompletion) {
+  return normalizeContent(chatResponse.choices[0]?.message?.content ?? "");
 }
 
 function mapFinishReason(value: unknown) {
@@ -163,19 +176,25 @@ function mapFinishReason(value: unknown) {
   return "end_turn";
 }
 
-async function* toAsyncIterable(value: unknown): AsyncIterable<any> {
-  if (value && typeof value === "object" && Symbol.asyncIterator in value) {
-    yield* value as AsyncIterable<any>;
+function isReadableStream<T>(value: unknown): value is ReadableStream<T> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "getReader" in value &&
+      typeof value.getReader === "function",
+  );
+}
+
+async function* toAsyncIterable<T>(
+  value: AsyncIterable<T> | ReadableStream<T>,
+): AsyncIterable<T> {
+  if (Symbol.asyncIterator in value) {
+    yield* value;
     return;
   }
 
-  if (
-    value &&
-    typeof value === "object" &&
-    "getReader" in value &&
-    typeof (value as ReadableStream).getReader === "function"
-  ) {
-    const reader = (value as ReadableStream).getReader();
+  if (isReadableStream<T>(value)) {
+    const reader = value.getReader();
     try {
       for (;;) {
         const next = await reader.read();
@@ -275,7 +294,9 @@ export async function handleResponsesRoute(
   const responseId = requestIdentifier(request, "resp");
 
   if (!request.stream) {
-    const chatResponse = await adapter.chatCompletionsCreate(chatRequest);
+    const chatResponse = (await adapter.chatCompletionsCreate(
+      chatRequest,
+    )) as ChatCompletion;
     const text = extractAssistantText(chatResponse);
     return jsonResponse({
       id: responseId,
@@ -298,10 +319,7 @@ export async function handleResponsesRoute(
         },
       ],
       output_text: text,
-      usage:
-        chatResponse && typeof chatResponse === "object"
-          ? chatResponse.usage
-          : undefined,
+      usage: chatResponse.usage,
     });
   }
 
@@ -317,7 +335,7 @@ export async function handleResponsesRoute(
     });
 
     for await (const chunk of toAsyncIterable(streamResult)) {
-      const delta = chunk?.choices?.[0]?.delta?.content;
+      const delta = chunk.choices[0]?.delta?.content;
       if (delta) {
         enqueueSse(controller, {
           type: "response.output_text.delta",
@@ -342,7 +360,9 @@ export async function handleMessagesRoute(
   const messageId = requestIdentifier(request, "msg");
 
   if (!request.stream) {
-    const chatResponse = await adapter.chatCompletionsCreate(chatRequest);
+    const chatResponse = (await adapter.chatCompletionsCreate(
+      chatRequest,
+    )) as ChatCompletion;
     const text = extractAssistantText(chatResponse);
     return jsonResponse({
       id: messageId,
@@ -350,11 +370,11 @@ export async function handleMessagesRoute(
       role: "assistant",
       model: CHAT_MODEL_ID,
       content: [{ type: "text", text }],
-      stop_reason: mapFinishReason(chatResponse?.choices?.[0]?.finish_reason),
+      stop_reason: mapFinishReason(chatResponse.choices[0]?.finish_reason),
       stop_sequence: null,
       usage: {
-        input_tokens: Number(chatResponse?.usage?.prompt_tokens ?? 0),
-        output_tokens: Number(chatResponse?.usage?.completion_tokens ?? 0),
+        input_tokens: Number(chatResponse.usage?.prompt_tokens ?? 0),
+        output_tokens: Number(chatResponse.usage?.completion_tokens ?? 0),
       },
     });
   }
@@ -381,7 +401,7 @@ export async function handleMessagesRoute(
     });
 
     for await (const chunk of toAsyncIterable(streamResult)) {
-      const delta = chunk?.choices?.[0]?.delta?.content;
+      const delta = chunk.choices[0]?.delta?.content;
       if (delta) {
         enqueueSse(controller, {
           type: "content_block_delta",

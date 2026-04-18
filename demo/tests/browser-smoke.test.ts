@@ -1,11 +1,37 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:net";
 import process from "node:process";
 import { chromium } from "playwright";
 import { afterAll, describe, expect, test } from "vitest";
 
-const previewUrl = "http://127.0.0.1:4173/?mockEngine=1";
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+
+async function reservePreviewPort() {
+  return await new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() =>
+          reject(new Error("Failed to reserve a preview port.")),
+        );
+        return;
+      }
+
+      const { port } = address;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(port);
+      });
+    });
+  });
+}
 
 async function waitForServer(url: string, timeoutMs: number) {
   const startedAt = Date.now();
@@ -45,12 +71,29 @@ describe.sequential("demo browser smoke", () => {
   });
 
   test("boots the built demo and exercises all endpoint panels in mock mode", async () => {
-    preview = spawn(npmCommand, ["run", "preview", "--", "--strictPort"], {
-      cwd: process.cwd(),
-      stdio: "inherit",
-    });
+    const previewPort = await reservePreviewPort();
+    const previewOrigin = `http://127.0.0.1:${previewPort}`;
+    const previewUrl = `${previewOrigin}/?mockEngine=1`;
 
-    await waitForServer("http://127.0.0.1:4173/", 30000);
+    preview = spawn(
+      npmCommand,
+      [
+        "run",
+        "preview",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(previewPort),
+        "--strictPort",
+      ],
+      {
+        cwd: process.cwd(),
+        stdio: "inherit",
+      },
+    );
+
+    await waitForServer(`${previewOrigin}/`, 30000);
 
     const browser = await chromium.launch();
     try {
