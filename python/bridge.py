@@ -142,8 +142,13 @@ class PyodideCallbackLogger(CustomLogger):
 _CALLBACK_LOGGER = PyodideCallbackLogger()
 
 
-async def bootstrap() -> str:
+async def bootstrap(config_json: str | None = None) -> str:
     _debug("bootstrap")
+    parsed: dict[str, Any] = {}
+    if config_json:
+        parsed = json.loads(config_json)
+        if isinstance(parsed, dict) and hasattr(litellm, "set_runtime_config"):
+            litellm.set_runtime_config(parsed)
     litellm.callbacks = [_CALLBACK_LOGGER]
     litellm.input_callback = [_CALLBACK_LOGGER]
     litellm.success_callback = [_CALLBACK_LOGGER]
@@ -152,6 +157,7 @@ async def bootstrap() -> str:
         {
             "bridge": "bridge.py",
             "litellm_version": getattr(litellm, "__version__", "unknown"),
+            "cors_buster_url": parsed.get("cors_buster_url"),
         }
     )
 

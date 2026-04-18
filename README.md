@@ -13,6 +13,8 @@ This package keeps the Python runtime, wheel install, and worker boot path insid
 - ReadableStream support for streamed chat, messages, and responses calls.
 - EventEmitter-style callback forwarding on the main thread.
 - Worker-backed execution so Python startup and request work stay off the main thread.
+- Optional browser-side `corsBusterUrl` rewriting for cross-origin requests that need a CORS proxy.
+- A React + WebLLM GitHub Pages demo with one shared service-worker engine and IndexedDB-backed model reuse.
 
 ## Installation
 
@@ -32,6 +34,7 @@ import { createClient } from "litellm-pyodide";
 const client = createClient({
 	maxWorkers: 1,
 	warmup: true,
+	corsBusterUrl: "https://cors-anywhere.example/",
 });
 
 const response = await client.chatCompletions.create({
@@ -161,6 +164,63 @@ Current worker and request events:
 
 Event payloads are serialized JavaScript objects, not raw Python objects.
 
+## Browser Proxy Support
+
+Browser requests can optionally rewrite their final outbound URL through a CORS proxy.
+
+```ts
+const client = createClient({
+	maxWorkers: 1,
+	corsBusterUrl: "https://cors-anywhere.example/",
+});
+
+await client.chatCompletions.create({
+	model: "openai/gpt-4o-mini",
+	api_base: "https://api.openai.com",
+	api_key: "browser-key",
+	messages: [{ role: "user", content: "hello" }],
+});
+```
+
+The runtime applies the proxy only after the final provider URL is resolved. It deliberately bypasses proxying when:
+
+- no proxy base is configured
+- the target is same-origin with the current browser page
+- the target has already been prefixed with the proxy base
+
+When the proxy is used, the runtime also adds `X-Requested-With: litellm-pyodide`.
+
+## GitHub Pages Demo
+
+This repository now includes a React demo under `demo/` that exercises the built package artifact against same-origin service-worker routes backed by WebLLM.
+
+Fixed demo models:
+
+- chat: `SmolLM2-360M-Instruct-q4f16_1-MLC`
+- embeddings: `snowflake-arctic-embed-m-q0f32-MLC-b4`
+
+The demo uses one shared WebLLM service-worker engine with `cacheBackend: "indexeddb"`. The UI explicitly shows whether the browser is still downloading model assets or reusing cached artifacts from previous visits.
+
+Local demo routes:
+
+- `POST /demo-openai/v1/chat/completions`
+- `POST /demo-openai/v1/responses`
+- `POST /demo-anthropic/v1/messages`
+- `POST /demo-openai/v1/embeddings`
+
+### Demo Commands
+
+```bash
+npm run demo:install
+npm run demo:build
+npm run demo:preview
+npm run demo:test
+```
+
+`demo:build` rebuilds the package dist output, copies it into `demo/public/litellm-pyodide`, and then builds the Vite app.
+
+`demo:test` runs the demo unit tests and a browser smoke path against the built demo in mock mode so the Pages workflow can validate the transport path without requiring WebGPU in CI.
+
 ## Warmup And Health
 
 Pyodide startup is the expensive path. If you want to pay that cost before the first request, call warmup explicitly.
@@ -210,6 +270,7 @@ Useful namespaces:
 npm run build
 npm run typecheck
 npm test
+npm run demo:test
 ```
 
 The test suite covers:
@@ -220,6 +281,8 @@ The test suite covers:
 - stream handling and abort behavior
 - callback forwarding and request scoping
 - browser worker smoke coverage against the built dist output
+- demo startup-state helpers and route adapters
+- demo browser smoke coverage against the built Pages app in mock mode
 
 ## Repository Layout
 

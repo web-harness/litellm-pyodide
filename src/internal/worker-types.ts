@@ -10,6 +10,7 @@ export interface WorkerInitializePayload {
   runtime: RuntimeKind;
   manifestUrl?: string;
   manifest?: RuntimeManifest;
+  corsBusterUrl?: string;
 }
 
 export interface WorkerInvokePayload {

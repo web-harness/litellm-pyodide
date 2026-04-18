@@ -32,6 +32,11 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "format": "run-s format:js python:format",
     "lint": "run-s lint:js python:lint",
+    "demo:install": "npm --prefix demo install",
+    "demo:sync-runtime": "NODE_OPTIONS='--import tsx' zx build.ts demo-sync-runtime",
+    "demo:build": "npm run build && npm run demo:sync-runtime && npm --prefix demo run build",
+    "demo:preview": "npm run build && npm run demo:sync-runtime && npm --prefix demo run preview",
+    "demo:test": "npm run demo:build && npm --prefix demo run test",
     "test": "npm run build && vitest run"
   },
   "repository": {

@@ -111,6 +111,7 @@ export interface ClientOptions {
   warmup?: boolean;
   requestTimeoutMs?: number;
   manifestUrl?: string;
+  corsBusterUrl?: string;
 }
 
 export interface HealthSnapshot {

@@ -31,6 +31,11 @@ input_callback: list[CustomLogger] = []
 success_callback: list[CustomLogger] = []
 failure_callback: list[CustomLogger] = []
 
+_RUNTIME_CONFIG: dict[str, Any] = {
+    "cors_buster_url": None,
+    "runtime": None,
+}
+
 
 @dataclass(slots=True)
 class _ProviderRequest:
@@ -195,6 +200,50 @@ def _join_api_base(api_base: str | None, endpoint_path: str, default_base: str) 
     return f"{trimmed}/v1/{endpoint_path}"
 
 
+def _normalize_proxy_base(proxy_base: str) -> str:
+    trimmed = proxy_base.strip()
+    if not trimmed:
+        return trimmed
+    return trimmed if trimmed.endswith("/") else f"{trimmed}/"
+
+
+def _browser_origin() -> str | None:
+    try:
+        import js
+
+        origin = getattr(getattr(js, "location", None), "origin", None)
+        if origin is None:
+            return None
+        return str(origin)
+    except Exception:
+        return None
+
+
+def _apply_cors_buster(url: str, headers: dict[str, str]) -> tuple[str, dict[str, str]]:
+    proxy_base = _RUNTIME_CONFIG.get("cors_buster_url")
+    if not isinstance(proxy_base, str) or not proxy_base.strip():
+        return url, headers
+
+    normalized_proxy_base = _normalize_proxy_base(proxy_base)
+    if url.startswith(normalized_proxy_base):
+        return url, headers
+
+    origin = _browser_origin()
+    if origin is not None:
+        normalized_origin = origin.rstrip("/")
+        if url == normalized_origin or url.startswith(f"{normalized_origin}/"):
+            return url, headers
+
+    next_headers = dict(headers)
+    next_headers["x-requested-with"] = "litellm-pyodide"
+    return f"{normalized_proxy_base}{url}", next_headers
+
+
+def set_runtime_config(config: dict[str, Any] | None = None) -> None:
+    if isinstance(config, dict):
+        _RUNTIME_CONFIG.update(config)
+
+
 def _filter_payload(kwargs: dict[str, Any], excluded: Iterable[str]) -> dict[str, Any]:
     excluded_set = set(excluded)
     return {
@@ -259,15 +308,18 @@ def _prepare_request(endpoint: str, kwargs: dict[str, Any]) -> _ProviderRequest:
                 "extra_headers",
             },
         )
+        url = _join_api_base(
+            kwargs.get("api_base"),
+            "messages",
+            "https://api.anthropic.com/v1/messages",
+        )
+        headers = _anthropic_headers(kwargs)
+        url, headers = _apply_cors_buster(url, headers)
         return _ProviderRequest(
             provider="anthropic",
             model=model,
-            url=_join_api_base(
-                kwargs.get("api_base"),
-                "messages",
-                "https://api.anthropic.com/v1/messages",
-            ),
-            headers=_anthropic_headers(kwargs),
+            url=url,
+            headers=headers,
             payload=payload,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
@@ -289,15 +341,18 @@ def _prepare_request(endpoint: str, kwargs: dict[str, Any]) -> _ProviderRequest:
             "extra_headers",
         },
     )
+    url = _join_api_base(
+        kwargs.get("api_base"),
+        endpoint_map[endpoint],
+        f"https://api.openai.com/v1/{endpoint_map[endpoint]}",
+    )
+    headers = _openai_headers(kwargs)
+    url, headers = _apply_cors_buster(url, headers)
     return _ProviderRequest(
         provider=provider,
         model=model,
-        url=_join_api_base(
-            kwargs.get("api_base"),
-            endpoint_map[endpoint],
-            f"https://api.openai.com/v1/{endpoint_map[endpoint]}",
-        ),
-        headers=_openai_headers(kwargs),
+        url=url,
+        headers=headers,
         payload=payload,
         timeout_seconds=timeout_seconds,
         metadata=metadata,

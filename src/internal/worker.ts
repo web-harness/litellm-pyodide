@@ -30,6 +30,7 @@ interface WorkerState {
   runtime: RuntimeKind;
   workerId: string;
   manifest?: RuntimeManifest;
+  corsBusterUrl?: string;
   pyodide?: PyodideInterface;
   installedWheels: string[];
   lastFatalError?: string;
@@ -313,9 +314,15 @@ async function loadBridge(
   await pyodide.runPythonAsync(
     [
       "import sys",
+      "import json",
       "sys.path.append('/runtime_bridge')",
       "import bridge",
-      "await bridge.bootstrap()",
+      `await bridge.bootstrap(${JSON.stringify(
+        JSON.stringify({
+          cors_buster_url: state.corsBusterUrl ?? null,
+          runtime: state.runtime,
+        }),
+      )})`,
     ].join("\n"),
   );
 }
@@ -332,6 +339,7 @@ async function initialize(
 
   state.initializing = true;
   state.runtime = payload.runtime;
+  state.corsBusterUrl = payload.corsBusterUrl;
   debug("initialize", { runtime: payload.runtime, workerId: state.workerId });
   emit({
     type: "worker:boot",

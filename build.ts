@@ -25,6 +25,9 @@ const metadataDir = path.join(internalDir, "metadata");
 const pyodideDir = path.join(internalDir, "pyodide");
 const wheelsDir = path.join(internalDir, "wheels");
 const pythonDir = path.join(internalDir, "python");
+const demoDir = path.join(rootDir, "demo");
+const demoPublicRuntimeDir = path.join(demoDir, "public", "litellm-pyodide");
+const demoDistDir = path.join(demoDir, "dist");
 const tempDir = path.join(rootDir, ".tmp", "build");
 const downloadedWheelsDir = path.join(tempDir, "wheels-download");
 const buildDebug = createDebug("litellmPyodide:build");
@@ -128,6 +131,74 @@ async function collectFiles(dirPath: string): Promise<string[]> {
     }),
   );
   return files.flat();
+}
+
+async function syncDemoRuntimeAssets() {
+  buildDebug("syncing runtime assets into demo public directory");
+  const workerpoolSource = path.join(
+    rootDir,
+    "node_modules",
+    "workerpool",
+    "dist",
+    "workerpool.js",
+  );
+  const vendorDir = path.join(demoPublicRuntimeDir, "vendor");
+  const workerpoolBrowserShimPath = path.join(
+    vendorDir,
+    "workerpool-browser.mjs",
+  );
+
+  await stat(distDir);
+  await rm(demoPublicRuntimeDir, { recursive: true, force: true });
+  await mkdir(demoPublicRuntimeDir, { recursive: true });
+  await cp(distDir, demoPublicRuntimeDir, { recursive: true });
+  await mkdir(vendorDir, { recursive: true });
+  await cp(workerpoolSource, path.join(vendorDir, "workerpool.js"));
+  await writeFile(
+    workerpoolBrowserShimPath,
+    ['import "./workerpool.js";', "export default globalThis.workerpool;"].join(
+      "\n",
+    ),
+    "utf8",
+  );
+
+  for (const filePath of await collectFiles(demoPublicRuntimeDir)) {
+    if (!filePath.endsWith(".mjs")) {
+      continue;
+    }
+
+    const relativeShimPath = path
+      .relative(path.dirname(filePath), workerpoolBrowserShimPath)
+      .replaceAll(path.sep, "/");
+    const normalizedShimPath = relativeShimPath.startsWith(".")
+      ? relativeShimPath
+      : `./${relativeShimPath}`;
+    const contents = await readFile(filePath, "utf8");
+    const patched = contents
+      .replaceAll('from "workerpool"', `from "${normalizedShimPath}"`)
+      .replaceAll("from 'workerpool'", `from '${normalizedShimPath}'`);
+
+    if (patched !== contents) {
+      await writeFile(filePath, patched, "utf8");
+    }
+  }
+}
+
+async function finalizeDemoBuild() {
+  buildDebug("publishing bundled demo service worker");
+  const assetsDir = path.join(demoDistDir, "assets");
+  const assetNames = await readdir(assetsDir);
+  const workerAsset = assetNames.find((fileName) =>
+    /^sw-.*\.js$/.test(fileName),
+  );
+
+  if (!workerAsset) {
+    throw new Error(
+      "Could not find the bundled service worker asset in demo/dist/assets.",
+    );
+  }
+
+  await cp(path.join(assetsDir, workerAsset), path.join(demoDistDir, "sw.js"));
 }
 
 async function buildOverlayWheel(overlayPackageDir: string, version: string) {
@@ -429,6 +500,31 @@ async function emitDeclarations() {
 }
 
 async function main() {
+  const supportedModes = new Set([
+    "build",
+    "demo-sync-runtime",
+    "finalize-demo-build",
+  ]);
+  const mode =
+    [...process.argv].reverse().find((arg) => supportedModes.has(arg)) ??
+    "build";
+
+  if (mode === "demo-sync-runtime") {
+    await syncDemoRuntimeAssets();
+    console.log(
+      chalk.yellow("Synced runtime assets into demo/public/litellm-pyodide."),
+    );
+    return;
+  }
+
+  if (mode === "finalize-demo-build") {
+    await finalizeDemoBuild();
+    console.log(
+      chalk.yellow("Published demo/dist/sw.js from the bundled worker asset."),
+    );
+    return;
+  }
+
   console.log(chalk.blue("Building litellm-pyodide..."));
 
   await ensureCleanDir(distDir);

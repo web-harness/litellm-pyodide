@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
@@ -22,6 +23,14 @@ const mimeTypes = new Map([
 
 function contentTypeFor(filePath: string) {
   return mimeTypes.get(path.extname(filePath)) ?? "application/octet-stream";
+}
+
+async function readBody(req: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function withTimeout<T>(
@@ -48,6 +57,8 @@ async function withTimeout<T>(
 
 describe.sequential("browser smoke", () => {
   const provider = createMockProviderServer();
+  const crossOriginProvider = createMockProviderServer();
+  const proxyRequests: Array<{ path: string; targetUrl: string }> = [];
   const server = createServer(async (req, res) => {
     if (!req.url) {
       res.writeHead(404);
@@ -98,6 +109,25 @@ describe.sequential("browser smoke", () => {
       return;
     }
 
+    if (req.url.startsWith("/proxy/")) {
+      const body = await readBody(req);
+      const targetUrl = req.url.slice("/proxy/".length);
+      proxyRequests.push({ path: req.url, targetUrl });
+      const headers = { ...req.headers };
+      delete headers.host;
+      const proxied = await fetch(targetUrl, {
+        method: req.method,
+        headers: headers as Record<string, string>,
+        body,
+      });
+      res.writeHead(proxied.status, {
+        "content-type":
+          proxied.headers.get("content-type") ?? "application/json",
+      });
+      res.end(await proxied.text());
+      return;
+    }
+
     if (req.url.startsWith("/v1/")) {
       provider.server.emit("request", req, res);
       return;
@@ -126,17 +156,24 @@ describe.sequential("browser smoke", () => {
   });
 
   let origin = "";
+  let crossOriginBase = "";
 
   beforeAll(async () => {
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", () => resolve());
     });
+    await new Promise<void>((resolve) => {
+      crossOriginProvider.server.listen(0, "127.0.0.1", () => resolve());
+    });
     const address = server.address() as AddressInfo;
+    const crossAddress = crossOriginProvider.server.address() as AddressInfo;
     origin = `http://127.0.0.1:${address.port}`;
+    crossOriginBase = `http://127.0.0.1:${crossAddress.port}`;
   }, 60_000);
 
   afterAll(async () => {
     await closeServer(server);
+    await closeServer(crossOriginProvider.server);
   });
 
   it("boots in a browser worker and handles non-stream and stream requests", async () => {
@@ -233,6 +270,71 @@ describe.sequential("browser smoke", () => {
         { chunk: { type: "response.output_text.delta" } },
         { chunk: { type: "response.completed" } },
       ]);
+
+      await withTimeout(
+        page.evaluate(
+          async ({ baseUrl, proxyBase, crossBase }) => {
+            const module = window.__litellmPyodide;
+            const client = module.createClient({
+              maxWorkers: 1,
+              warmup: false,
+              corsBusterUrl: proxyBase,
+            });
+
+            try {
+              await client.chatCompletions.create({
+                model: "openai/browser-proxy-direct",
+                api_base: baseUrl,
+                api_key: "browser-secret",
+                metadata: { testCase: "same-origin-proxy-bypass" },
+                messages: [{ role: "user", content: "same-origin" }],
+              });
+
+              await client.chatCompletions.create({
+                model: "openai/browser-proxy-cross-origin",
+                api_base: crossBase,
+                api_key: "browser-secret",
+                metadata: { testCase: "cross-origin-proxy-applied" },
+                messages: [{ role: "user", content: "cross-origin" }],
+              });
+            } finally {
+              await client.close();
+            }
+          },
+          {
+            baseUrl: origin,
+            proxyBase: `${origin}/proxy/`,
+            crossBase: crossOriginBase,
+          },
+        ),
+        30_000,
+        diagnostics,
+      );
+
+      const sameOriginRequest = provider.requests.find(
+        (entry) =>
+          entry.body.metadata &&
+          (entry.body.metadata as Record<string, unknown>).testCase ===
+            "same-origin-proxy-bypass",
+      );
+      const crossOriginRequest = crossOriginProvider.requests.find(
+        (entry) =>
+          entry.body.metadata &&
+          (entry.body.metadata as Record<string, unknown>).testCase ===
+            "cross-origin-proxy-applied",
+      );
+
+      expect(sameOriginRequest?.headers["x-requested-with"]).toBeUndefined();
+      expect(proxyRequests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            targetUrl: `${crossOriginBase}/v1/chat/completions`,
+          }),
+        ]),
+      );
+      expect(crossOriginRequest?.headers["x-requested-with"]).toBe(
+        "litellm-pyodide",
+      );
     } finally {
       await page.close();
       await browser.close();

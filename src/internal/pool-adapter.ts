@@ -90,6 +90,7 @@ export class PoolAdapter {
               runtime: this.runtime,
               manifest,
               manifestUrl: this.options.manifestUrl,
+              corsBusterUrl: this.options.corsBusterUrl,
             },
           ]),
         ),
