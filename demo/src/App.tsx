@@ -27,6 +27,13 @@ import {
 import bundledServiceWorkerUrl from "./sw.ts?worker&url";
 
 type DemoClient = ReturnType<LiteLLMPyodideRuntime["createClient"]>;
+type PromptPanelMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+const minComputeWorkgroupStorageSize = 32_768;
 
 type DemoPhase =
   | "idle"
@@ -79,6 +86,100 @@ function getEventEndpoint(
   return "unknown";
 }
 
+function normalizeAssistantContent(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => {
+        if (typeof entry === "string") {
+          return entry;
+        }
+
+        if (entry && typeof entry === "object" && "text" in entry) {
+          return String(entry.text ?? "");
+        }
+
+        return JSON.stringify(entry);
+      })
+      .join("\n")
+      .trim();
+  }
+
+  if (value && typeof value === "object" && "text" in value) {
+    return String(value.text ?? "");
+  }
+
+  return String(value ?? "").trim();
+}
+
+function extractAssistantReply(value: unknown): string {
+  if (!value || typeof value !== "object" || !("choices" in value)) {
+    return "No assistant content returned.";
+  }
+
+  const { choices } = value;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return "No assistant content returned.";
+  }
+
+  const firstChoice = choices[0];
+  if (
+    !firstChoice ||
+    typeof firstChoice !== "object" ||
+    !("message" in firstChoice)
+  ) {
+    return "No assistant content returned.";
+  }
+
+  const { message } = firstChoice;
+  if (!message || typeof message !== "object" || !("content" in message)) {
+    return "No assistant content returned.";
+  }
+
+  return (
+    normalizeAssistantContent(message.content) ||
+    "No assistant content returned."
+  );
+}
+
+function createPromptMessage(
+  role: PromptPanelMessage["role"],
+  content: string,
+): PromptPanelMessage {
+  return {
+    id: crypto.randomUUID(),
+    role,
+    content,
+  };
+}
+
+function bindClientEvents(
+  client: DemoClient,
+  setLogs: Dispatch<SetStateAction<string[]>>,
+) {
+  client.events.on("worker:boot", () =>
+    pushLog(setLogs, "Runtime worker booted."),
+  );
+  client.events.on("worker:ready", () =>
+    pushLog(setLogs, "Runtime worker ready."),
+  );
+  client.events.on("callback:pre_api_call", (payload) =>
+    pushLog(setLogs, `Callback pre_api_call for ${getEventEndpoint(payload)}`),
+  );
+  client.events.on("callback:success", (payload) =>
+    pushLog(setLogs, `Callback success for ${getEventEndpoint(payload)}`),
+  );
+  client.events.on("request:stream_chunk", (payload) =>
+    pushLog(setLogs, `Stream chunk for ${getEventEndpoint(payload)}`),
+  );
+  client.events.on("request:completed", (payload) =>
+    pushLog(setLogs, `Completed ${getEventEndpoint(payload)}`),
+  );
+}
+
 export function App() {
   void bundledServiceWorkerUrl;
   const serviceWorkerReloadKey = "litellm-pyodide-sw-reload";
@@ -119,6 +220,14 @@ export function App() {
   const [embeddingsText, setEmbeddingsText] = useState(
     "No embeddings result yet.",
   );
+  const [promptInput, setPromptInput] = useState(
+    "Summarize what this demo is proving in two sentences.",
+  );
+  const [promptMessages, setPromptMessages] = useState<PromptPanelMessage[]>(
+    [],
+  );
+  const [promptPending, setPromptPending] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, ModelStatus>>(
     createInitialModelStatuses(),
   );
@@ -132,6 +241,74 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+
+    async function detectRuntimeMode() {
+      if (mockEngine) {
+        return {
+          useMock: true,
+          webgpuMessage: "Mock engine active for automated smoke validation.",
+          fallbackReason: undefined,
+        };
+      }
+
+      const navigatorWithGpu = navigator as Navigator & {
+        gpu?: {
+          requestAdapter?: () => Promise<{
+            limits?: {
+              maxComputeWorkgroupStorageSize?: number;
+            };
+          } | null>;
+        };
+      };
+
+      if (!navigatorWithGpu.gpu?.requestAdapter) {
+        return {
+          useMock: true,
+          webgpuMessage:
+            "WebGPU is unavailable in this browser. Compatibility mock mode is active; use Chrome for live local inference.",
+          fallbackReason: "WebGPU is unavailable in this browser.",
+        };
+      }
+
+      try {
+        const adapter = await navigatorWithGpu.gpu.requestAdapter();
+        if (!adapter) {
+          return {
+            useMock: true,
+            webgpuMessage:
+              "No WebGPU adapter is available. Compatibility mock mode is active; use Chrome for live local inference.",
+            fallbackReason: "No WebGPU adapter is available.",
+          };
+        }
+
+        const workgroupStorageLimit =
+          adapter.limits?.maxComputeWorkgroupStorageSize;
+        if (
+          typeof workgroupStorageLimit === "number" &&
+          workgroupStorageLimit < minComputeWorkgroupStorageSize
+        ) {
+          return {
+            useMock: true,
+            webgpuMessage: `This browser exposes maxComputeWorkgroupStorageSize=${workgroupStorageLimit}, below the ${minComputeWorkgroupStorageSize} required by the fixed WebLLM models. Compatibility mock mode is active; use Chrome for live local inference.`,
+            fallbackReason: `Insufficient WebGPU workgroup storage limit (${workgroupStorageLimit}).`,
+          };
+        }
+
+        return {
+          useMock: false,
+          webgpuMessage: "WebGPU API detected in the browser.",
+          fallbackReason: undefined,
+        };
+      } catch (error) {
+        return {
+          useMock: true,
+          webgpuMessage:
+            "WebGPU adapter initialization failed in this browser. Compatibility mock mode is active; use Chrome for live local inference.",
+          fallbackReason:
+            error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
 
     async function waitForServiceWorkerController(timeoutMs: number) {
       if (navigator.serviceWorker.controller) {
@@ -163,14 +340,14 @@ export function App() {
       });
     }
 
-    async function registerServiceWorker() {
+    async function registerServiceWorker(useMockServiceWorker: boolean) {
       setPhase("registering");
       setServiceWorkerStatus("Registering module service worker...");
       const serviceWorkerUrl = new URL(
         `${import.meta.env.BASE_URL}sw.js`,
         window.location.href,
       );
-      if (mockEngine) {
+      if (useMockServiceWorker) {
         serviceWorkerUrl.searchParams.set("mock", "1");
       }
       const registration = await navigator.serviceWorker.register(
@@ -216,30 +393,6 @@ export function App() {
       return runtime;
     }
 
-    function bindClient(client: DemoClient) {
-      client.events.on("worker:boot", () =>
-        pushLog(setLogs, "Runtime worker booted."),
-      );
-      client.events.on("worker:ready", () =>
-        pushLog(setLogs, "Runtime worker ready."),
-      );
-      client.events.on("callback:pre_api_call", (payload) =>
-        pushLog(
-          setLogs,
-          `Callback pre_api_call for ${getEventEndpoint(payload)}`,
-        ),
-      );
-      client.events.on("callback:success", (payload) =>
-        pushLog(setLogs, `Callback success for ${getEventEndpoint(payload)}`),
-      );
-      client.events.on("request:stream_chunk", (payload) =>
-        pushLog(setLogs, `Stream chunk for ${getEventEndpoint(payload)}`),
-      );
-      client.events.on("request:completed", (payload) =>
-        pushLog(setLogs, `Completed ${getEventEndpoint(payload)}`),
-      );
-    }
-
     async function ensureClient(runtime: LiteLLMPyodideRuntime) {
       const nextProxy = normalizedProxyBase || undefined;
       if (clientRef.current && activeProxyRef.current === nextProxy) {
@@ -257,16 +410,19 @@ export function App() {
       });
       activeProxyRef.current = nextProxy;
       clientRef.current = client;
-      bindClient(client);
+      bindClientEvents(client, setLogs);
 
       return client;
     }
 
-    async function bootstrapMock(runtime: LiteLLMPyodideRuntime) {
+    async function bootstrapMock(
+      runtime: LiteLLMPyodideRuntime,
+      fallbackReason?: string,
+    ) {
       setPhase("loading_models");
-      setWebgpuStatus(
-        "Mock engine active for smoke coverage. Real WebGPU not required in this mode.",
-      );
+      if (fallbackReason) {
+        pushLog(setLogs, `Compatibility fallback enabled: ${fallbackReason}`);
+      }
       const timeline = createMockLoadingTimeline(createInitialModelStatuses());
       for (const snapshot of timeline) {
         if (cancelled) {
@@ -285,15 +441,6 @@ export function App() {
     async function bootstrapReal(runtime: LiteLLMPyodideRuntime) {
       setPhase("checking_cache");
       pushLog(setLogs, "Checking model cache state.");
-      const navigatorWithGpu = navigator as Navigator & { gpu?: unknown };
-      setWebgpuStatus(
-        navigatorWithGpu.gpu
-          ? "WebGPU API detected in the browser."
-          : "WebGPU API missing. The demo cannot load local models without it.",
-      );
-      if (!navigatorWithGpu.gpu) {
-        throw new Error("WebGPU is required for the live WebLLM demo.");
-      }
 
       const cacheState = {
         [CHAT_MODEL_ID]: await hasModelInCache(
@@ -336,10 +483,16 @@ export function App() {
 
     async function boot() {
       try {
-        await registerServiceWorker();
+        const runtimeMode = await detectRuntimeMode();
+        if (cancelled) {
+          return;
+        }
+
+        setWebgpuStatus(runtimeMode.webgpuMessage);
+        await registerServiceWorker(runtimeMode.useMock);
         const runtime = await ensureRuntimeLoaded();
-        if (mockEngine) {
-          await bootstrapMock(runtime);
+        if (runtimeMode.useMock) {
+          await bootstrapMock(runtime, runtimeMode.fallbackReason);
           return;
         }
         await bootstrapReal(runtime);
@@ -390,7 +543,7 @@ export function App() {
       });
       activeProxyRef.current = nextProxy;
       clientRef.current = client;
-      bindClient(client);
+      bindClientEvents(client, setLogs);
     }
 
     return action(runtime, clientRef.current);
@@ -487,7 +640,55 @@ export function App() {
     setEmbeddingsText(formatJson(result));
   }
 
+  async function sendPrompt() {
+    const nextPrompt = promptInput.trim();
+    if (!nextPrompt || promptPending) {
+      return;
+    }
+
+    const nextMessages: PromptPanelMessage[] = [
+      ...promptMessages,
+      createPromptMessage("user", nextPrompt),
+    ];
+
+    setPromptPending(true);
+    setPromptError(null);
+    setPromptMessages(nextMessages);
+    setPromptInput("");
+
+    try {
+      const response = await withClient(async (_runtime, client) =>
+        client.chatCompletions.create({
+          model: CHAT_MODEL_ID,
+          api_base: openAiBase,
+          messages: nextMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+          temperature: 0.2,
+          stream: false,
+        }),
+      );
+
+      setPromptMessages([
+        ...nextMessages,
+        createPromptMessage("assistant", extractAssistantReply(response)),
+      ]);
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : String(error));
+      setPromptInput(nextPrompt);
+    } finally {
+      setPromptPending(false);
+    }
+  }
+
+  function clearPromptPanel() {
+    setPromptMessages([]);
+    setPromptError(null);
+  }
+
   async function reinitializeModels() {
+    clearPromptPanel();
     setStatuses(createInitialModelStatuses());
     setPhase("idle");
     if (clientRef.current) {
@@ -557,6 +758,11 @@ export function App() {
           <p className="startup-summary" data-testid="startup-summary">
             {startupSummary}
           </p>
+          <div className="button-row startup-actions">
+            <button type="button" onClick={reinitializeModels}>
+              Reinitialize local models
+            </button>
+          </div>
           <div className="model-status-grid">
             {Object.values(statuses).map((status) => (
               <div
@@ -574,11 +780,6 @@ export function App() {
                 </span>
               </div>
             ))}
-          </div>
-          <div className="button-row">
-            <button type="button" onClick={reinitializeModels}>
-              Reinitialize local models
-            </button>
           </div>
         </article>
       </section>
@@ -714,7 +915,7 @@ export function App() {
         <article className="panel">
           <h2>Proxy Panel</h2>
           <label className="field-label" htmlFor="proxy-base">
-            Optional corsBusterUrl
+            Optional CORS Buster URL
           </label>
           <input
             id="proxy-base"
@@ -728,6 +929,61 @@ export function App() {
             would be rewritten.
           </p>
           <pre>{proxyExample}</pre>
+        </article>
+
+        <article className="panel prompt-panel">
+          <h2>Prompt Panel</h2>
+          <div className="button-row">
+            <button
+              type="button"
+              disabled={!ready || promptPending || !promptInput.trim()}
+              onClick={() => void sendPrompt()}
+            >
+              {promptPending ? "Sending..." : "Send prompt"}
+            </button>
+            <button
+              type="button"
+              disabled={promptPending || promptMessages.length === 0}
+              onClick={clearPromptPanel}
+            >
+              Clear chat
+            </button>
+          </div>
+          <label className="field-label" htmlFor="prompt-input">
+            Prompt composer
+          </label>
+          <textarea
+            id="prompt-input"
+            value={promptInput}
+            onChange={(event) => setPromptInput(event.target.value)}
+            placeholder="Ask the model something direct."
+            rows={4}
+          />
+          <div className="chat-transcript" data-testid="prompt-thread">
+            {promptMessages.length > 0 ? (
+              promptMessages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`chat-bubble role-${message.role}`}
+                >
+                  <strong>
+                    {message.role === "user" ? "You" : "Assistant"}
+                  </strong>
+                  <span>{message.content}</span>
+                </div>
+              ))
+            ) : (
+              <p className="chat-empty">
+                Send a prompt here to get a regular chat reply from the active
+                model route.
+              </p>
+            )}
+          </div>
+          {promptError ? (
+            <p className="error-copy" data-testid="prompt-error">
+              {promptError}
+            </p>
+          ) : null}
         </article>
 
         <article className="panel log-panel">

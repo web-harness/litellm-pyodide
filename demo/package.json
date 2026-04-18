@@ -5,7 +5,7 @@
   "scripts": {
     "build": "vite build && NODE_OPTIONS='--import tsx' zx ../build.ts finalize-demo-build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "NODE_OPTIONS='--import tsx' zx ../build.ts demo-sync-runtime && npm run build && vitest run"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "latest",

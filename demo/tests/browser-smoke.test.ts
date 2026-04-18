@@ -124,6 +124,10 @@ describe.sequential("demo browser smoke", () => {
       await page.getByRole("button", { name: "Run non-stream" }).nth(2).click();
       await page.getByRole("button", { name: "Run stream" }).nth(2).click();
       await page.getByRole("button", { name: "Run embeddings" }).click();
+      await page
+        .locator("#prompt-input")
+        .fill("Give me a short proof this mock route is wired correctly.");
+      await page.getByRole("button", { name: "Send prompt" }).click();
 
       await page.waitForFunction(
         () =>
@@ -149,6 +153,11 @@ describe.sequential("demo browser smoke", () => {
             .querySelector('[data-testid="embeddings-output"]')
             ?.textContent?.includes("No embeddings result yet."),
       );
+      await page.waitForFunction(() =>
+        document
+          .querySelector('[data-testid="prompt-thread"]')
+          ?.textContent?.includes("Mock reply for"),
+      );
 
       const chatText = await page.getByTestId("chat-output").textContent();
       const responsesText = await page
@@ -160,11 +169,15 @@ describe.sequential("demo browser smoke", () => {
       const embeddingsText = await page
         .getByTestId("embeddings-output")
         .textContent();
+      const promptThreadText = await page
+        .getByTestId("prompt-thread")
+        .textContent();
 
       expect(chatText).toContain("Mock");
       expect(responsesText).toContain("response.completed");
       expect(messagesText).toContain("message_stop");
       expect(embeddingsText).toContain("embedding");
+      expect(promptThreadText).toContain("Mock reply for");
 
       await page.close();
     } finally {

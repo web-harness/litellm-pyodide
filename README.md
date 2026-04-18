@@ -4,6 +4,10 @@ Run LiteLLM inside Pyodide workers from one JavaScript client for Node and the b
 
 This package keeps the Python runtime, wheel install, and worker boot path inside the package. You call LiteLLM-style endpoints from JavaScript, and the package handles Pyodide, the local wheelhouse, and callback forwarding behind the scenes.
 
+## Audience
+
+This library is intended for harness developers and advanced users who want to run LiteLLM-compatible providers in JS environments without reinventing the wheel.
+
 ## Features
 
 - Single public ESM entrypoint.

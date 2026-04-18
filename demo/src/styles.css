@@ -39,6 +39,7 @@ body {
 
 button,
 input,
+textarea,
 pre,
 dd {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
@@ -211,6 +212,15 @@ dd {
   margin-bottom: 14px;
 }
 
+.prompt-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.startup-actions {
+  margin-top: 14px;
+}
+
 button {
   border: 1px solid rgba(102, 52, 24, 0.22);
   background: linear-gradient(180deg, #fffdf5, #f0dcc0);
@@ -226,6 +236,15 @@ button:disabled {
 
 input {
   width: 100%;
+  border: 1px solid rgba(102, 52, 24, 0.22);
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
   border: 1px solid rgba(102, 52, 24, 0.22);
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.7);
@@ -249,6 +268,55 @@ pre {
   background: rgba(255, 255, 255, 0.5);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.chat-transcript {
+  display: grid;
+  gap: 10px;
+  min-height: 200px;
+  max-height: 320px;
+  margin-bottom: 14px;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid rgba(80, 54, 26, 0.1);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.prompt-panel .button-row,
+.prompt-panel .chat-transcript {
+  margin-bottom: 0;
+}
+
+.chat-empty,
+.error-copy {
+  margin: 0;
+  color: var(--muted);
+}
+
+.error-copy {
+  color: var(--danger);
+}
+
+.chat-bubble {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.chat-bubble strong {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-bubble.role-user {
+  background: rgba(245, 229, 203, 0.92);
+}
+
+.chat-bubble.role-assistant {
+  background: rgba(255, 251, 242, 0.96);
 }
 
 .log-panel {
